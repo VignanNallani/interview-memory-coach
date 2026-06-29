@@ -1,202 +1,125 @@
 # 🎯 Interview Memory Coach
 
-> AI interview coaching that knows **your** history — grounded in your resume, target role, and every past interview Q&A you've ever given.
+**AI interview coaching that remembers *your* history — not generic advice.**
 
-Most interview-prep tools give the same advice to everyone. This one reads your actual track record — your resume, the specific job you want, the questions you've been asked before and how you answered them — and builds a **personal knowledge graph** that every coaching answer must be grounded in. Ask it about system design, it cites the exact past interview where you proposed SQLite for a 10 M req/day workload and couldn't explain distributed scale. Ask about your strengths, it points to the FastAPI work you already know cold.
+Most AI interview prep starts from zero every time. You paste your resume, it gives you the same tips it gives everyone, and it forgets you the moment the session ends. Interview Memory Coach is different: it builds a **permanent, structured memory** of your resume, your target role, and every past interview where you struggled — then coaches you against *your actual gaps*.
 
----
+> Your interview history → a knowledge graph → grounded coaching that names your real weaknesses → an offer you actually land.
 
-## Demo
-
-<!-- Replace with your actual screenshot / GIF -->
-![Demo screenshot](docs/demo.png)
-
-**Live walkthrough video:** [link to your recording]
+Built on [Cognee](https://github.com/topoteretes/cognee)'s self-hosted, hybrid graph-vector memory layer for **The Hangover Part AI: Where's My Context?** hackathon.
 
 ---
 
-## Architecture
+## Why this isn't just RAG
+
+A normal RAG chatbot retrieves text chunks and hopes the LLM stitches them together. Interview Memory Coach uses Cognee's **`GRAPH_COMPLETION`** search — it traverses a real knowledge graph extracted from your history, so the coaching is grounded in *connected facts*, not loose snippets.
+
+Ask it "How should I prepare for system design?" and it doesn't give textbook advice. It answers:
+
+> *"You've struggled with system design in past interviews — you were asked to design a URL shortener at 10M req/day, proposed SQLite, and admitted you couldn't handle distributed scale. The senior backend role you're targeting requires exactly this..."*
+
+That specificity comes from the graph below — where `jane → senior backend engineer role → system design → distributed databases → url shortener` are real nodes connected by real relationships.
+
+![Knowledge graph extracted from interview history](docs/demo.png)
+
+*The memory graph: Cognee parsed a resume, job description, and past interview Q&A into 20 entity nodes and 30 relationships, stored in an embedded graph database. Every coaching answer traverses this graph.*
+
+---
+
+## The full Cognee memory lifecycle
+
+This project uses **all four** of Cognee's memory operations — each doing something real and observable:
+
+| Operation | In the coach | What it does |
+|-----------|--------------|--------------|
+| **remember** | Ingest resume + JD + past Q&A | `add` + `cognify` build the knowledge graph |
+| **recall** | Ask a coaching question | `GRAPH_COMPLETION` traverses the graph for a grounded answer |
+| **improve** | "Deepen my memory graph" | `memify` enrichment pass over the stored graph |
+| **forget** | "Forget the sample session" | Full memory wipe so stale interviews stop polluting coaching |
+
+---
+
+## How it works
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                        Streamlit UI  (app.py)                      │
-│   Tab 1: Coach me │ Tab 2: Memory graph │ Tab 3: Add your own      │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │ direct Python calls (no HTTP)
-┌──────────────────────────────▼─────────────────────────────────────┐
-│                    Coach logic  (src/coach/loop.py)                │
-│   ingest_session()  ──►  store.add() + store.cognify()            │
-│   coach()           ──►  store.recall()                           │
-│   FastAPI app       ──►  POST /ingest, POST /coach, GET /health   │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼─────────────────────────────────────┐
-│                 Memory store  (src/memory/store.py)                │
-│                  thin async wrapper around cognee 1.2              │
-│                                                                    │
-│   add()      ── stages text, writes metadata ──► SQLite           │
-│   cognify()  ── LLM entity extraction ──────────► KuzuDB (graph)  │
-│              ── chunk embedding ────────────────► LanceDB (vectors)│
-│   recall()   ── GRAPH_COMPLETION search ────────► 70B LLM answer  │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │
-               ┌───────────────┴───────────────┐
-               │                               │
-    ┌──────────▼──────────┐        ┌──────────▼──────────┐
-    │  Groq (extraction)  │        │  fastembed (local)  │
-    │  llama-3.1-8b-inst  │        │  BAAI/bge-small-en  │
-    │  ~2 LLM calls/ingest│        │  no API key needed  │
-    └─────────────────────┘        └─────────────────────┘
-    ┌─────────────────────┐
-    │  Groq (answers)     │
-    │  llama-3.3-70b-ver  │
-    │  1 call per question│
-    └─────────────────────┘
+Resume + Job Description + Past Interview Q&A
+                │
+                ▼
+        cognee.add()  ──────►  raw text stored
+                │
+                ▼
+        cognee.cognify()  ──►  LLM extracts entities + relationships
+                │              into a KuzuDB knowledge graph
+                ▼              (chunks embedded into LanceDB via fastembed)
+                │
+                ▼
+   cognee.search(GRAPH_COMPLETION)  ──►  graph traversal + LLM answer
+                │
+                ▼
+        Grounded coaching that cites your actual past failures
 ```
 
-**Local storage** — all three databases live in `./data/databases/`:
-
-| Database | Purpose |
-|---|---|
-| `cognee_db` (SQLite) | Dataset registry, document metadata, task status |
-| `cognee_graph_ladybug` (KuzuDB) | Entity/relationship graph — the coaching brain |
-| `cognee.lancedb` (LanceDB) | Chunk embedding vectors for semantic search |
+Three tabs in the UI:
+- **Coach me** — ask questions, get answers grounded in your history
+- **The memory graph** — visualize the knowledge graph (Graph / Schema / Memory views)
+- **Add your own** — ingest your real resume, JD, and past interviews
 
 ---
 
-## The key design decisions
+## Engineering decisions (and the bugs behind them)
 
-### 1. Graph-completion retrieval, not plain RAG
+This section is honest about what it took to make Cognee behave for a fast, free-tier, single-user demo. Each decision was a real trade-off:
 
-Most "AI with memory" demos do vector similarity search: embed the question, find the nearest chunks, shove them in a prompt. That misses cross-document reasoning.
+**1. `GRAPH_COMPLETION` over plain RAG.**
+The whole point is graph-grounded answers. `GRAPH_COMPLETION` does graph traversal *and* LLM synthesis in one call — that's the differentiator over vector-only retrieval.
 
-This project uses cognee's `GRAPH_COMPLETION` search: the query is first matched against the LanceDB vector index, then the retrieved nodes are used as seeds to **traverse the KuzuDB entity graph**, collecting related facts across documents. The LLM sees not just "here is a chunk about system design" but "Jane has Python/FastAPI experience [edge: used\_by] URL shortener design question [edge: struggled\_with] distributed scale [edge: required\_by] target JD". That's what makes the coaching answer reference her *specific* past failure, not generic advice.
+**2. A two-model split — then a deliberate change.**
+I started with `llama-3.1-8b-instant` for graph extraction (cheap) and `llama-3.3-70b-versatile` for coaching answers (quality). But the 8B model **intermittently violated Cognee's strict `KnowledgeGraph` JSON schema** — it would emit nodes missing required `description` fields, all retries would fail, and ingest would crash. Since ingest runs **once** (the sample is pre-loaded), I moved extraction to 70B too: the cost is acceptable for a one-time call, the crashes disappeared, and the graph got *denser* (12 nodes → 20 nodes).
 
-### 2. Two-model split: 8B for extraction, 70B for answers
+**3. The session-memory bug.**
+Coaching answers were short-circuiting — repeat questions returned *"I'll wait for further clarification"* instead of a real answer. Root cause: Cognee's `search()` defaults `session_id` to `'default_session'`, so every question was treated as one continuing conversation. Fix: pass a fresh `uuid.uuid4()` session ID per call, plus `CACHING=false`. Fresh, independent answers every time.
 
-Cognee's `cognify()` pipeline calls the LLM **twice per chunk** — once to extract named entities, once to summarise. These calls need structured JSON output (function-calling), not eloquence. `llama-3.1-8b-instant` is fast and cheap enough to handle this within Groq's 6000 TPM free tier.
+**4. The `forget()` discovery.**
+`cognee.forget(dataset=...)` *reported* success but recall still returned the "forgotten" data. Digging in: with `ENABLE_BACKEND_ACCESS_CONTROL=false` (required for single-user local mode), `GRAPH_COMPLETION` is a **global** graph traversal that ignores dataset scoping — so per-dataset deletion left residual nodes the retriever still found. For a single-dataset demo, the reliable equivalent is a full `prune_system` wipe. (True multi-dataset surgical forget would require enabling access control and scoping searches per-user — the production path.)
 
-The coaching answer (`store.recall()`) fires **one** LLM call that needs actual reasoning quality. That call uses `llama-3.3-70b-versatile` via a per-call `LLMConfig` override — better advice, zero impact on ingestion cost.
-
-### 3. One merged document per session ingest
-
-Naively adding four documents (resume + JD + Q&A×2) and calling `cognify()` spawns four parallel LLM extraction chains in the same minute, blowing past the 6000 TPM limit. The fix: merge all session materials into one labelled document before `add()`. Section headers (`[RESUME]`, `[JOB DESCRIPTION]`, `[INTERVIEW HISTORY]`) preserve semantic boundaries inside the single chunk while keeping cognify to one LLM-call burst.
-
-### 4. KuzuDB is single-process by design
-
-KuzuDB is an embedded graph database (like SQLite, but for graphs). It holds an exclusive write lock on the database file — only one process can open it at a time. For a per-user coaching tool, this is the right trade: zero operational overhead, no server to run, no credentials to manage. The constraint is: run `streamlit run app.py` *or* `uvicorn src.coach.loop:app`, never both simultaneously.
+**5. Fully self-hosted, no cloud, no paid keys.**
+SQLite + LanceDB + an embedded KuzuDB graph store, with `fastembed` (`BAAI/bge-small-en-v1.5`) for local CPU embeddings. The only external call is to Groq's free tier for the LLM. No data leaves the machine.
 
 ---
 
-## Quick start
-
-### Prerequisites
-
-- Python 3.10+
-- A [Groq](https://console.groq.com) API key (free tier is enough)
-
-### Setup
+## Run it yourself
 
 ```bash
-git clone https://github.com/<you>/interview-memory-coach
+# 1. Clone and enter
+git clone https://github.com/VignanNallani/interview-memory-coach.git
 cd interview-memory-coach
 
+# 2. Create a virtual environment and install
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
-
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 pip install -e .
-```
 
-### Configure
+# 3. Configure your Groq key
+copy .env.template .env       # Windows  (cp on macOS/Linux)
+# Edit .env and set LLM_API_KEY=gsk_your_groq_key
+# Get a free key at https://console.groq.com/keys
 
-```bash
-cp .env.template .env
-# Edit .env and set LLM_API_KEY=gsk_...
-# Everything else in .env.template is already correct for Groq + local storage.
-```
-
-### Run the Streamlit demo
-
-```bash
-# Windows
-$env:PYTHONUTF8=1
+# 4. Run
+set PYTHONUTF8=1              # Windows (avoids cp1252 issues)
 streamlit run app.py
-
-# macOS/Linux
-PYTHONUTF8=1 streamlit run app.py
 ```
 
-Open http://localhost:8501. The first run ingests the sample session (~30 s); subsequent runs are instant.
+The sample "Jane" session pre-loads on first launch (~30s cold start while the graph builds). Then ask a question, render the graph, or ingest your own history.
 
-### Run the FastAPI server (optional, alternative to Streamlit)
-
-```bash
-uvicorn src.coach.loop:app --port 8000
-```
-
-```bash
-# Ingest a session
-curl -X POST http://localhost:8000/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"resume": "...", "job_description": "...", "past_qa": ["Past interview: ..."]}'
-
-# Get coaching
-curl -X POST http://localhost:8000/coach \
-  -H "Content-Type: application/json" \
-  -d '{"question": "How should I prepare for system design questions?"}'
-```
-
-**Do not run both Streamlit and FastAPI at the same time** — they share the KuzuDB file lock.
+**Stack:** Python · Cognee 1.2.1 · Streamlit · Groq (Llama 3.1/3.3) · KuzuDB · LanceDB · fastembed
 
 ---
 
-## Project layout
+## AI Assistance Disclosure
 
-```
-interview-memory-coach/
-├── app.py                  # Streamlit demo UI
-├── smoke_test.py           # End-to-end stack verification (no LLM coaching)
-├── test_coach.py           # Graph-grounded coaching pipeline test
-├── src/
-│   ├── memory/
-│   │   └── store.py        # Thin async wrapper: configure/add/cognify/recall/search
-│   └── coach/
-│       └── loop.py         # ingest_session(), coach(), FastAPI app
-├── .env.template           # Credentials template (copy to .env)
-└── pyproject.toml
-```
+This project was built with AI coding assistants — primarily Claude Code for implementation, and Claude for architecture and debugging strategy. Every architectural decision was mine: choosing `GRAPH_COMPLETION` over plain RAG to exploit the knowledge graph, the model-selection trade-offs, diagnosing the per-call `session_id` bug, discovering the dataset-scoping behavior behind `forget()`, and designing the full remember → recall → improve → forget lifecycle around a real use case. I directed, reviewed, and understand every line, and can defend each decision in detail.
 
 ---
 
-## Running the smoke test
-
-Verifies the full local stack (SQLite + LanceDB + KuzuDB) without spending tokens on the coaching model:
-
-```bash
-python smoke_test.py
-```
-
-Verifies the graph-grounded coaching pipeline end-to-end:
-
-```bash
-python test_coach.py
-```
-
----
-
-## Stack
-
-| Component | Library | Role |
-|---|---|---|
-| Memory layer | [cognee](https://github.com/topoteretes/cognee) 1.2 | Add / cognify / search orchestration |
-| Graph DB | KuzuDB via ladybug | Entity-relationship storage, graph traversal |
-| Vector DB | LanceDB | Chunk embedding + ANN search |
-| Relational DB | SQLite (aiosqlite) | Dataset registry, task tracking |
-| Embeddings | fastembed + BAAI/bge-small-en-v1.5 | Local, no API key |
-| LLM (extraction) | Groq llama-3.1-8b-instant | Fast structured entity extraction |
-| LLM (coaching) | Groq llama-3.3-70b-versatile | High-quality coaching answers |
-| UI | Streamlit 1.58 | Three-tab demo with live graph viz |
-| HTTP API | FastAPI + uvicorn | REST alternative to the UI |
+*Built for The Hangover Part AI hackathon — giving an AI a memory so your interview prep finally remembers you.*
