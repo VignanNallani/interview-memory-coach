@@ -9,3 +9,4 @@ graph_visualization.html
 .demo_ingested
 *.egg-info/
 dist/
+verify_lifecycle.py

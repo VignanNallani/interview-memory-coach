@@ -182,21 +182,24 @@ async def improve(dataset_name: str = "session") -> None:
 
 async def forget(dataset_name: str) -> None:
     """
-    Surgically remove an entire dataset from all three storage backends.
+    Wipe all stored memory so subsequent recall() calls return empty.
 
-    What cognee.forget(dataset=...) does:
-    - Deletes all KuzuDB entity nodes and relationship edges for the named dataset.
-    - Deletes all LanceDB chunk embeddings for the dataset.
-    - Removes relational metadata (dataset row + data records) from SQLite.
-    - Leaves all other datasets untouched.
+    Why prune_system instead of cognee.forget(dataset=...)?
+    With ENABLE_BACKEND_ACCESS_CONTROL=false (required for single-user local mode),
+    GRAPH_COMPLETION search is a global KuzuDB traversal — it does NOT filter by dataset.
+    Per-dataset deletion via cognee.forget() removes only the nodes tagged to that dataset,
+    but any co-ingested or residual nodes remain and the retriever still finds them.
+    Confirmed: even with memory_only=True, recall() still returns a full answer after forget.
+    prune_system(graph=True, vector=True, metadata=True) is the only path that guarantees
+    an empty result from GRAPH_COMPLETION search.
 
-    All args to cognee.forget() are keyword-only (bare * in the signature) — the
-    dataset= keyword is required; positional passing raises TypeError.
-
-    Use this to surgically remove a stale interview session so it no longer
-    pollutes coaching answers, without resetting the entire knowledge graph.
+    Single-dataset contract: this project ingests only a "session" dataset.
+    Wiping everything is semantically equivalent to forgetting that dataset.
+    Reload calls ingest_session() which re-adds and re-cognifies from scratch.
     """
-    await cognee.forget(dataset=dataset_name)
+    # Full wipe: KuzuDB graph + LanceDB vectors + SQLite metadata + session cache.
+    # Equivalent to reset() — separated here so the docstring can explain the why.
+    await cognee.prune.prune_system(graph=True, vector=True, metadata=True, cache=True)
 
 
 async def search(query: str, top_k: int = 5) -> list:
