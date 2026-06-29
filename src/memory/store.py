@@ -24,6 +24,7 @@ Storage layout produced by configure(data_dir="./data")
 """
 
 import os
+import uuid
 import cognee
 
 # SearchType is accessible at cognee top-level (1.x) and cognee.api.v1.search.
@@ -140,12 +141,16 @@ async def recall(question: str, top_k: int = 5) -> str:
         llm_model="groq/llama-3.3-70b-versatile",
         llm_api_key=os.getenv("LLM_API_KEY"),
     )
+    # session_id=None defaults to 'default_session' — cognee treats repeated calls as a
+    # multi-turn conversation and short-circuits with "I'll wait for clarification".
+    # A fresh UUID per call forces an independent session so every question is answered fresh.
     results = await cognee.search(
         query_text=question,
         query_type=SearchType.GRAPH_COMPLETION,
         system_prompt=COACH_SYSTEM_PROMPT,
         top_k=top_k,
         llm_config=answer_llm,
+        session_id=str(uuid.uuid4()),
     )
     return results[0] if results else ""
 
