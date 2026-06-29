@@ -115,7 +115,20 @@ async def cognify(datasets: list[str] | None = None) -> None:
     datasets: list of dataset name strings to process a subset.
               Pass None to process everything staged since the last cognify().
     """
-    await cognee.cognify(datasets=datasets)
+    # 70B for extraction: 8B intermittently omits required 'description' fields in the
+    # KnowledgeGraph JSON schema, causing cognify to exhaust all retries and fail.
+    await cognee.cognify(datasets=datasets, llm_config=_llm_70b())
+
+
+def _llm_70b() -> LLMConfig:
+    # 70B for both extraction and coaching: 8B intermittently violates the strict
+    # KnowledgeGraph JSON schema cognee requires during cognify (missing 'description'
+    # fields cause all retries to fail). Ingest is one-time so the extra tokens are fine.
+    return LLMConfig(
+        llm_provider="openai",
+        llm_model="groq/llama-3.3-70b-versatile",
+        llm_api_key=os.getenv("LLM_API_KEY"),
+    )
 
 
 COACH_SYSTEM_PROMPT = """You are an interview coach speaking DIRECTLY to the candidate in second person ("you"). Use ONLY their history in context (resume, target JD, past interview Q&A). Ground every point in what their history shows. Be concrete and direct. If their history reveals a weakness on the asked topic, name it plainly and give 2-3 specific, actionable steps. NEVER write a fake interview question, NEVER refer to the candidate in third person by name, NEVER add meta-commentary about the question. Begin with the coaching directly. Never invent experience they don't have."""
@@ -129,18 +142,10 @@ async def recall(question: str, top_k: int = 5) -> str:
     so the answer can reason over *connections between facts* across documents rather
     than just returning the nearest text chunk.  CHUNKS would miss those inferences.
 
-    8B (from .env) handles structured cognify extraction; 70B only fires here for the
-    single user-facing answer — better reasoning quality without touching ingestion cost.
-    top_k=5 keeps the graph context small so each 70B call stays well under Groq's
-    free-tier 6000 TPM.
+    70B handles both cognify extraction and the coaching answer — extraction reliability
+    outweighs TPM cost since ingest is one-time.  top_k=5 keeps graph context small so
+    each search call stays well under Groq's free-tier 6000 TPM.
     """
-    # llm_provider must be "openai" — cognee's only OpenAI-compat adapter.
-    # groq/ prefix lets litellm route to Groq's API without a custom endpoint.
-    answer_llm = LLMConfig(
-        llm_provider="openai",
-        llm_model="groq/llama-3.3-70b-versatile",
-        llm_api_key=os.getenv("LLM_API_KEY"),
-    )
     # session_id=None defaults to 'default_session' — cognee treats repeated calls as a
     # multi-turn conversation and short-circuits with "I'll wait for clarification".
     # A fresh UUID per call forces an independent session so every question is answered fresh.
@@ -149,7 +154,7 @@ async def recall(question: str, top_k: int = 5) -> str:
         query_type=SearchType.GRAPH_COMPLETION,
         system_prompt=COACH_SYSTEM_PROMPT,
         top_k=top_k,
-        llm_config=answer_llm,
+        llm_config=_llm_70b(),
         session_id=str(uuid.uuid4()),
     )
     return results[0] if results else ""
