@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+smoke_data/
+coach_test_data/
+graph_visualization.html
+.demo_ingested
+*.egg-info/
+dist/

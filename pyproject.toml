@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "interview-memory-coach"
+version = "0.1.0"
+description = "AI interview coaching backed by a self-hosted Cognee knowledge graph"
+requires-python = ">=3.10"
+dependencies = [
+    # Cognee: graph+vector+relational memory layer (LanceDB+KuzuDB+SQLite bundled)
+    "cognee>=1.2,<2",
+    # FastAPI + Uvicorn: future HTTP API surface for the coach
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    # Load .env credentials without polluting shell environment
+    "python-dotenv>=1.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
