@@ -38,6 +38,20 @@ class CoachResponse(BaseModel):
     answer: str
 
 
+class ImproveResponse(BaseModel):
+    status: str
+    message: str
+
+
+class ForgetRequest(BaseModel):
+    dataset_name: str
+
+
+class ForgetResponse(BaseModel):
+    status: str
+    message: str
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -81,6 +95,16 @@ async def coach(question: str) -> str:
     return await store.recall(question)
 
 
+async def mark_practiced() -> None:
+    """Run the graph enrichment pass over the session dataset."""
+    await store.improve(dataset_name="session")
+
+
+async def forget_session(dataset_name: str) -> None:
+    """Surgically remove a named dataset from the knowledge graph."""
+    await store.forget(dataset_name)
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -101,6 +125,27 @@ async def coach_endpoint(req: CoachRequest) -> CoachResponse:
     if not answer or not answer.strip():
         raise HTTPException(status_code=404, detail="No relevant context found — ingest a session first.")
     return CoachResponse(answer=answer)
+
+
+@app.post("/improve", response_model=ImproveResponse)
+async def improve_endpoint() -> ImproveResponse:
+    try:
+        await mark_practiced()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return ImproveResponse(status="ok", message="Graph enrichment pass complete.")
+
+
+@app.post("/forget", response_model=ForgetResponse)
+async def forget_endpoint(req: ForgetRequest) -> ForgetResponse:
+    try:
+        await forget_session(req.dataset_name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return ForgetResponse(
+        status="ok",
+        message=f"Dataset '{req.dataset_name}' removed from knowledge graph.",
+    )
 
 
 @app.get("/health")

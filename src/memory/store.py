@@ -155,6 +155,45 @@ async def recall(question: str, top_k: int = 5) -> str:
     return results[0] if results else ""
 
 
+async def improve(dataset_name: str = "session") -> None:
+    """
+    Run cognee's post-ingestion enrichment pass (memify Stage 3) over the dataset graph.
+
+    What cognee.improve() does without session_ids:
+    - Extracts triplet embeddings from existing KuzuDB nodes and indexes them in LanceDB.
+    - Re-indexes vector data points for improved ANN retrieval quality.
+    - Does NOT replay Q&A feedback or modify node feedback_weight values — that path
+      requires an active session cache (CACHING=true) with stored used_graph_element_ids,
+      which we keep off to prevent the "I'll wait for clarification" deferral bug.
+
+    Why call it here:
+    After the candidate marks a topic as practiced, this deepens the triplet index so
+    future GRAPH_COMPLETION searches traverse more richly connected edges, surfacing
+    finer-grained coaching context on subsequent questions.
+    """
+    # dataset= is keyword-only in cognee.improve() — positional passing raises TypeError.
+    await cognee.improve(dataset=dataset_name)
+
+
+async def forget(dataset_name: str) -> None:
+    """
+    Surgically remove an entire dataset from all three storage backends.
+
+    What cognee.forget(dataset=...) does:
+    - Deletes all KuzuDB entity nodes and relationship edges for the named dataset.
+    - Deletes all LanceDB chunk embeddings for the dataset.
+    - Removes relational metadata (dataset row + data records) from SQLite.
+    - Leaves all other datasets untouched.
+
+    All args to cognee.forget() are keyword-only (bare * in the signature) — the
+    dataset= keyword is required; positional passing raises TypeError.
+
+    Use this to surgically remove a stale interview session so it no longer
+    pollutes coaching answers, without resetting the entire knowledge graph.
+    """
+    await cognee.forget(dataset=dataset_name)
+
+
 async def search(query: str, top_k: int = 5) -> list:
     """
     Retrieve semantically relevant chunks using vector similarity.

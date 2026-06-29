@@ -153,13 +153,40 @@ with tab_coach:
                 answer = ""
 
         if answer and answer.strip():
-            st.markdown("---")
-            st.markdown(answer)
+            st.session_state["coaching_answer"] = answer
+            st.session_state.pop("improve_done", None)
         else:
+            st.session_state.pop("coaching_answer", None)
             st.warning(
                 "No relevant context found. "
                 "Make sure a session has been ingested (check the **Add your own** tab)."
             )
+
+    if st.session_state.get("coaching_answer"):
+        st.markdown("---")
+        st.markdown(st.session_state["coaching_answer"])
+        st.markdown("")
+
+        if not st.session_state.get("improve_done"):
+            if st.button(
+                "🧠 Deepen my memory graph",
+                key="improve_btn",
+                help=(
+                    "Runs a graph enrichment pass (triplet re-indexing) over the session "
+                    "dataset. This strengthens the connections cognee can traverse for "
+                    "future questions — it does not store feedback scores."
+                ),
+            ):
+                with st.spinner("Re-indexing graph triplets (~15 s)…"):
+                    try:
+                        run(loop.mark_practiced())
+                        st.session_state["improve_done"] = True
+                        st.toast("Memory graph deepened — triplet index rebuilt.", icon="🧠")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Enrichment failed: {exc}")
+        else:
+            st.caption("✓ Memory graph deepened for this answer.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,3 +289,56 @@ with tab_add:
                     st.session_state.pop("graph_fallback", None)
                 except Exception as exc:
                     st.error(f"Ingestion failed: {exc}")
+
+    # ── Sample session lifecycle ───────────────────────────────────────────────
+    st.divider()
+    st.subheader("Sample session management")
+    st.caption(
+        "The Jane fixture is pre-loaded on startup. "
+        "Use **Forget** to remove it from the knowledge graph; "
+        "use **Reload** to restore it."
+    )
+
+    col_forget, col_reload = st.columns(2)
+
+    with col_forget:
+        st.warning("⚠️ This deletes the sample — use **Reload** to restore.", icon="⚠️")
+        if st.button(
+            "🗑️ Forget the sample session",
+            key="forget_btn",
+            use_container_width=True,
+        ):
+            with st.spinner("Removing sample session from knowledge graph…"):
+                try:
+                    run(loop.forget_session("session"))
+                    if os.path.exists(FLAG_FILE):
+                        os.remove(FLAG_FILE)
+                    for key in ("demo_ready", "graph_html", "graph_error",
+                                "graph_fallback", "coaching_answer", "improve_done"):
+                        st.session_state.pop(key, None)
+                    st.success("Sample session removed from knowledge graph.")
+                except Exception as exc:
+                    st.error(f"Forget failed: {exc}")
+
+    with col_reload:
+        st.info("Re-ingests the Jane fixture and rebuilds the graph (~30 s).", icon="↺")
+        if st.button(
+            "↺ Reload sample session",
+            key="reload_btn",
+            use_container_width=True,
+        ):
+            with st.spinner("Re-ingesting Jane fixture — rebuilding knowledge graph (~30 s)…"):
+                try:
+                    run(loop.ingest_session(RESUME, JD, PAST_QA))
+                    os.makedirs(DATA_DIR, exist_ok=True)
+                    open(FLAG_FILE, "w").write("ingested")
+                    st.session_state["demo_ready"] = True
+                    for key in ("graph_html", "graph_error", "graph_fallback",
+                                "coaching_answer", "improve_done"):
+                        st.session_state.pop(key, None)
+                    st.success(
+                        "Sample session restored! "
+                        "Switch to **💬 Coach me** to ask questions."
+                    )
+                except Exception as exc:
+                    st.error(f"Reload failed: {exc}")
