@@ -321,7 +321,7 @@ with tab_add:
                     st.error(f"Forget failed: {exc}")
 
     with col_reload:
-        st.info("Re-ingests the Jane fixture and rebuilds the graph (~30 s).", icon="↺")
+        st.info("Re-ingests the Jane fixture and rebuilds the graph (~30 s).", icon="🔄")
         if st.button(
             "↺ Reload sample session",
             key="reload_btn",
