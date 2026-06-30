@@ -24,6 +24,8 @@ That specificity comes from the graph below — where `jane → senior backend e
 
 *The memory graph: Cognee parsed a resume, job description, and past interview Q&A into 20 entity nodes and 30 relationships, stored in an embedded graph database. Every coaching answer traverses this graph.*
 
+**▶️ [Watch the 3-minute demo](https://youtu.be/Qv29MZECxZ8)**
+
 ---
 
 ## The full Cognee memory lifecycle
