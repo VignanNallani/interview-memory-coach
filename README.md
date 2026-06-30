@@ -26,6 +26,8 @@ That specificity comes from the graph below — where `jane → senior backend e
 
 **▶️ [Watch the 3-minute demo](https://youtu.be/Qv29MZECxZ8)**
 
+**📝 [Read the build story](https://dev.to/vignannallani/i-gave-an-ai-a-memory-of-my-interview-history-heres-what-i-learned-building-on-cognee-5h76)**
+
 ---
 
 ## The full Cognee memory lifecycle
